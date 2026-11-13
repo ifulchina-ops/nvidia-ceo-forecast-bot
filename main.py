@@ -8,25 +8,26 @@ price at every minute of the 72 hours up to a checkpoint) and writes
 /output/<id>.out: for each market and each of the 240 minutes after the
 checkpoint, the 5%, 25%, 50%, 75% and 95% quantiles of that minute's price.
 
-Method (backtested on the six public practice cases; mean pinball loss 0.29
+Method (backtested on the six public practice cases; mean pinball loss 0.276
 points vs 0.37 for the house persistence baseline): the forecast is an
 equal-thirds blend of three per-market quantile forecasters, all centred on
 the market's last price (persistence median — short-horizon momentum was
 tested and hurt, so no drift is used):
 
 1. Normal / EWMA volatility: the standard normal quantiles scaled by an
-   exponentially-weighted (60-minute half-life) estimate of the market's
+   exponentially-weighted (20-minute half-life) estimate of the market's
    1-minute move size, growing with sqrt(horizon). Fast to adapt when a
    market heats up or calms down.
 2. Empirical 1-minute shape: the quantiles of the market's own 1-minute
-   price changes over the trailing 24 hours, scaled by sqrt(horizon).
+   price changes over the trailing 6 hours, scaled by sqrt(horizon).
    Captures each market's real move distribution — fat tails, jumps and
    asymmetry — instead of assuming normality.
 3. Empirical per-horizon shape: for anchor horizons (5, 15, 30, 60, 120,
    240 minutes) the quantiles of that horizon's actual price changes over
-   the trailing 24 hours, recentered on the last price and interpolated in
-   sqrt(horizon). Captures how moves really grow with horizon (slower than
-   a random walk when prices mean-revert, faster when they jump).
+   the trailing 6 hours, recentered on the last price and interpolated in
+   sqrt(horizon) — below the first anchor the quantiles shrink by
+   sqrt(h/anchor). Captures how moves really grow with horizon (slower
+   than a random walk when prices mean-revert, faster when they jump).
 
 Everything is deterministic (no randomness, no clock, no network), standard
 library only, and runs in well under a second per case.
@@ -48,12 +49,17 @@ OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]
 # Anchor horizons (minutes) for the per-horizon empirical shape.
 ANCHORS = [5, 15, 30, 60, 120, 240]
-# How far back the empirical shapes look (minutes): 24 hours. Longer windows
-# still hold the resignation shock of 10-11 Nov and overshoot the spread.
-LOOKBACK = 1440
-# EWMA half-life (minutes) for the volatility estimate: fast enough to track
-# this market's regime changes, slow enough not to chase single prints.
-EWMA_HALFLIFE = 60
+# How far back the empirical shapes look (minutes): 6 hours. Longer windows
+# still hold the resignation shock of 10-11 Nov and overshoot the spread;
+# the practice grid favours shorter windows at every half-life tried
+# (360 beats 720/1080/1440), and 360 sits on a broad flat minimum.
+LOOKBACK = 360
+# EWMA half-life (minutes) for the volatility estimate: the practice grid
+# is monotone in favour of shorter half-lives (60 -> 0.291, 30 -> 0.284,
+# 20 -> 0.282) and flat below 20, so 20 sits in the middle of the flat
+# bottom rather than at an edge — fast to track regime changes, slow
+# enough not to chase single prints.
+EWMA_HALFLIFE = 20
 # Bounds on the per-minute volatility (price units): the floor keeps a dead
 # market's interval from collapsing to a point, the cap keeps one wild print
 # from blowing it out.
@@ -114,7 +120,7 @@ def quantile_sorted(vals, tau):
 
 
 def ewma_sigma(prices):
-    """Exponentially-weighted std of 1-minute changes (60-min half-life)."""
+    """Exponentially-weighted std of 1-minute changes (20-min half-life)."""
     n = len(prices)
     if n < 20:
         return None
@@ -189,19 +195,22 @@ def rows_hshape(prices, horizon, quantiles):
     rows = []
     for h in range(1, horizon + 1):
         if h <= hs[0]:
-            lo_h, hi_h, w = hs[0], hs[0], 0.0
+            # Below the first anchor, shrink its quantiles by sqrt(h/anchor)
+            # (a random walk's spread at h minutes) instead of copying the
+            # anchor flat, which overshoots the first few minutes.
+            s = math.sqrt(h / hs[0])
+            row = [price6(x + q * s) for q in tables[hs[0]]]
         elif h >= hs[-1]:
-            lo_h, hi_h, w = hs[-1], hs[-1], 0.0
+            row = [price6(x + q) for q in tables[hs[-1]]]
         else:
             for a, b in zip(hs, hs[1:]):
                 if a <= h <= b:
-                    lo_h, hi_h = a, b
                     w = ((math.sqrt(h) - math.sqrt(a))
                          / (math.sqrt(b) - math.sqrt(a)))
+                    qlo, qhi = tables[a], tables[b]
+                    row = [price6(x + qlo[k] * (1 - w) + qhi[k] * w)
+                           for k in range(len(quantiles))]
                     break
-        qlo, qhi = tables[lo_h], tables[hi_h]
-        row = [price6(x + qlo[k] * (1 - w) + qhi[k] * w)
-               for k in range(len(quantiles))]
         for k in range(1, len(row)):
             if row[k] < row[k - 1]:
                 row[k] = row[k - 1]
