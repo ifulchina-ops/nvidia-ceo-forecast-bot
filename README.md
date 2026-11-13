@@ -16,20 +16,21 @@ The forecast is an equal-thirds blend of three per-market quantile
 forecasters, all centred on the market's last price:
 
 1. **Normal / EWMA volatility** — standard normal quantiles scaled by an
-   exponentially-weighted (60-minute half-life) estimate of the market's
+   exponentially-weighted (20-minute half-life) estimate of the market's
    1-minute move size, growing with the square root of the horizon. It
-   adapts within the hour when a market heats up or calms down.
+   adapts within minutes when a market heats up or calms down.
 2. **Empirical 1-minute shape** — the quantiles of the market's own
-   1-minute price changes over the trailing 24 hours, scaled by the square
+   1-minute price changes over the trailing 6 hours, scaled by the square
    root of the horizon. This captures each market's real move
    distribution — fat tails, jumps and asymmetry — instead of assuming
    normality.
 3. **Empirical per-horizon shape** — for anchor horizons (5, 15, 30, 60,
    120, 240 minutes) the quantiles of that horizon's actual price changes
-   over the trailing 24 hours, recentered on the last price and
-   interpolated in the square root of the horizon. This captures how moves
-   really grow with horizon, which is slower than a random walk when
-   prices mean-revert and faster when they jump.
+   over the trailing 6 hours, recentered on the last price and
+   interpolated in the square root of the horizon (below the first anchor
+   the quantiles shrink by the square root of h/anchor). This captures
+   how moves really grow with horizon, which is slower than a random walk
+   when prices mean-revert and faster when they jump.
 
 No drift is used: the median is the market's last price. Short-horizon
 momentum was tested on the practice cases and hurt — these prices do not
@@ -45,7 +46,7 @@ points, lower is better):
 | Forecaster | Mean pinball loss |
 |---|---|
 | House persistence baseline (sigma 0.0025) | 0.372 |
-| This entry (three-way blend) | **0.291** |
+| This entry (three-way blend) | **0.276** |
 
 The blend beats the baseline on every one of the six practice cases. The
 practice cases are public history, so the score is no guarantee for the
